@@ -74,8 +74,8 @@ typedef struct
   size_t cwnd;
   size_t ssthresh;
 
-  size_t seq_number;            /**< Keep the state of the sequence number */
-  size_t ack_number;            /**< Keep the state of the ack number */
+  size_t seq_number;            /**< Keep the state of the sequence number: The last ACK number we received || The next seq number to send */
+  size_t ack_number;            /**< Keep the state of the ack number: Last sequence number received + 1 || The new ACK number to send */
   uint64_t packets_send;
   uint64_t packets_received;
   uint64_t packets_lost;

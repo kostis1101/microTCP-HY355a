@@ -23,8 +23,41 @@
  * This file is already inserted at the build system.
  */
 
+
+#include "../lib/microtcp.h"
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+
 int
 main(int argc, char **argv)
 {
+	if (argc != 3) {
+		printf("WRONG USE!\n");
+		return -1;
+	}
 
+	struct sockaddr_in server_addr;
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(atoi(argv[2]));
+	server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+
+	microtcp_sock_t socket = microtcp_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+	microtcp_bind(&socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_in));
+
+	// if (listen(socket.sd, 1000) == -1) {
+	// 	printf("sdfoiajsdfopij\n");
+	// 	return -1;
+	// }
+
+	struct sockaddr client_addr;
+
+	int ret = microtcp_accept(&socket, &client_addr, sizeof(struct sockaddr));
+
+	if (ret) {
+		printf("Server ERROR\n");
+	}
+
+	printf("server finished\n");
 }
