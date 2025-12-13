@@ -55,6 +55,35 @@ microtcp_bind (microtcp_sock_t *socket, const struct sockaddr *address,
 	return res;
 }
 
+
+/* converts all headers from host to network byte order */
+static void header_to_net(microtcp_header_t *header) {
+	header->seq_number	= htonl(header->seq_number);
+	header->ack_number	= htonl(header->ack_number);
+	header->control		= htons(header->control);
+	header->window		= htons(header->window);
+	header->data_len	= htonl(header->data_len);
+	header->future_use0	= htonl(header->future_use0);
+	header->future_use1	= htonl(header->future_use1);
+	header->future_use2	= htonl(header->future_use2);
+	header->checksum	= htonl(header->checksum);
+}
+
+
+/* converts all headers from network to host byte order */
+static void header_to_host(microtcp_header_t *header) {
+	header->seq_number	= ntohl(header->seq_number);
+	header->ack_number	= ntohl(header->ack_number);
+	header->control		= ntohs(header->control);
+	header->window		= ntohs(header->window);
+	header->data_len	= ntohl(header->data_len);
+	header->future_use0	= ntohl(header->future_use0);
+	header->future_use1	= ntohl(header->future_use1);
+	header->future_use2	= ntohl(header->future_use2);
+	header->checksum	= ntohl(header->checksum);
+}
+
+
 int
 microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 									socklen_t address_len)
@@ -63,9 +92,9 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 	header.seq_number = 0;
 	header.ack_number = 0;
 	header.control = 1 << 1;
+	header.checksum = crc32((uint8_t*)&header, sizeof(microtcp_header_t));
 
-	header.checksum = crc32((uint8_t*)(void*)&header, sizeof(microtcp_header_t));
-
+	header_to_net(&header);
 	ssize_t s = sendto(socket->sd, &header, sizeof(header), 0, address, address_len);
 	if (s != sizeof(header)) {
 		socket->state = INVALID;
@@ -77,6 +106,8 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 	microtcp_header_t ret;
 
 	s = recvfrom(socket->sd, &ret, sizeof(microtcp_header_t), 0, address, &address_len);
+	header_to_host(&ret);
+
 	uint32_t rcs = ret.checksum;
 	ret.checksum = 0;
 	uint32_t cs = crc32((uint8_t*)&ret, sizeof(microtcp_header_t));
