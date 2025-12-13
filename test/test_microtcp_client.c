@@ -54,7 +54,5 @@ main(int argc, char **argv)
 		printf("Client ERROR\n");
 	}
 
-	recv(socket->sd)
-
 	printf("client finished\n");
 }
