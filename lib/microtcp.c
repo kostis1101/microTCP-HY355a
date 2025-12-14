@@ -41,8 +41,8 @@ static int set_seed = 0;
 #define RST 4
 #define ACK 8
 
-#define DEBUG 1
-#define THANOS_DEBUG 1
+#define DEBUG 0
+#define THANOS_DEBUG 0
 
 
 #define create_checksum(header) (header)->checksum = crc32((uint8_t*)(header), sizeof(microtcp_header_t))
