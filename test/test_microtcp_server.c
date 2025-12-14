@@ -60,6 +60,8 @@ main(int argc, char **argv)
 	do {
 		recv(socket.sd, &rec_header, sizeof(microtcp_header_t), 0);
 		rec_header.control = htons(rec_header.control);
+		printf("Received header:\n")
+		print_header(&rec_header);
 	} while(!(rec_header.control & 1));
 
 	socket.state = CLOSING_BY_PEER;

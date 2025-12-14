@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 
 static int set_seed = 0;
 
@@ -124,9 +125,10 @@ static int __check_checksum_header(microtcp_header_t header) {
 	}
 
 #define DEBUG 1
+#define THANOS_DEBUG 1
 
 
-static void print_header(microtcp_header_t *header) {
+void print_header(microtcp_header_t *header) {
 	printf("[HEADER] Seq: %d\n", header->seq_number);
 	printf("[HEADER] Ack: %d\n", header->ack_number);
 	printf("[HEADER] Control: %d\n", header->control);
@@ -135,6 +137,10 @@ static void print_header(microtcp_header_t *header) {
 static int send_header(microtcp_sock_t *socket, microtcp_header_t *header, struct sockaddr *address, socklen_t address_len) {
 
 	ssize_t s;
+
+#if DEBUG
+	sleep(2);
+#endif
 
 	header->seq_number = socket->seq_number;
 	header->ack_number = socket->ack_number;
@@ -161,10 +167,16 @@ static int send_header(microtcp_sock_t *socket, microtcp_header_t *header, struc
 static int receive_header(microtcp_sock_t *socket, microtcp_header_t *header, struct sockaddr *address, socklen_t address_len) {
 	ssize_t s;
 
+
 	s = recvfrom(socket->sd, header, sizeof(microtcp_header_t), 0, address, &address_len);
 	header_to_host(header);
 
 #if DEBUG
+
+# if THANOS_DEBUG
+	sleep(1);
+# endif
+	
 	printf("Received header: \n");
 	print_header(header);
 #endif
