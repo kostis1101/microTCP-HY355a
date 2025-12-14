@@ -46,11 +46,6 @@ main(int argc, char **argv)
 
 	microtcp_bind(&socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_in));
 
-	// if (listen(socket.sd, 1000) == -1) {
-	// 	printf("sdfoiajsdfopij\n");
-	// 	return -1;
-	// }
-
 	struct sockaddr client_addr;
 
 	int ret = microtcp_accept(&socket, &client_addr, sizeof(struct sockaddr));
@@ -59,5 +54,16 @@ main(int argc, char **argv)
 		printf("Server ERROR\n");
 	}
 
-	printf("server finished\n");
+	printf("Server: connection established\n");
+
+	microtcp_header_t rec_header = { 0 };
+	do {
+		recv(socket.sd, &rec_header, sizeof(microtcp_header_t), 0);
+		rec_header.control = htons(rec_header.control);
+	} while(!(rec_header.control & 1));
+
+	socket.state = CLOSING_BY_PEER;
+	microtcp_shutdown(&socket, 0);
+
+	printf("Server: connetion shutdown\n");
 }

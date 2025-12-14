@@ -54,5 +54,9 @@ main(int argc, char **argv)
 		printf("Client ERROR\n");
 	}
 
-	printf("client finished\n");
+	printf("Client: connection established\n");
+
+	microtcp_shutdown(&socket, 0);
+
+	printf("Client: connection shutdown\n");
 }

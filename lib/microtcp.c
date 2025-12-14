@@ -123,13 +123,30 @@ static int __check_checksum_header(microtcp_header_t header) {
 		return -1; \
 	}
 
+#define DEBUG 1
+
+
+static void print_header(microtcp_header_t *header) {
+	printf("[HEADER] Seq: %d\n", header->seq_number);
+	printf("[HEADER] Ack: %d\n", header->ack_number);
+	printf("[HEADER] Control: %d\n", header->control);
+}
 
 static int send_header(microtcp_sock_t *socket, microtcp_header_t *header, struct sockaddr *address, socklen_t address_len) {
 
 	ssize_t s;
 
+	header->seq_number = socket->seq_number;
+	header->ack_number = socket->ack_number;
+
 	header->checksum = 0;
 	create_checksum(header);
+
+#if DEBUG
+	printf("Sent header: \n");
+	print_header(header);
+#endif
+
 	header_to_net(header);
 	s = sendto(socket->sd, header, sizeof(microtcp_header_t), 0, address, address_len);
 
@@ -147,6 +164,11 @@ static int receive_header(microtcp_sock_t *socket, microtcp_header_t *header, st
 	s = recvfrom(socket->sd, header, sizeof(microtcp_header_t), 0, address, &address_len);
 	header_to_host(header);
 
+#if DEBUG
+	printf("Received header: \n");
+	print_header(header);
+#endif
+
 	if (s != sizeof(microtcp_header_t))	{
 		socket->state = INVALID;
 		return -1;
@@ -161,10 +183,14 @@ static int receive_header(microtcp_sock_t *socket, microtcp_header_t *header, st
 
 static int rand32() {
 	if (!set_seed) {
-		srand(time(NULL));
+		srand(time(NULL) ^ getpid());
 	}
 
+#if !DEBUG
 	return (rand() << 30) | (rand() << 15) | rand();
+#else
+	return rand() % 32;
+#endif
 }
 
 int
@@ -172,8 +198,8 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 									socklen_t address_len)
 {
 	microtcp_header_t header = { 0 };
-	header.seq_number = rand32();
-	header.ack_number = 0;
+	socket->seq_number = rand32();
+	socket->ack_number = 0;
 	header.control = SYN;
 	
 	if (send_header(socket, &header, address, address_len))
@@ -196,8 +222,6 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 	}
 
 	microtcp_header_t header2 = { 0 };
-	header2.seq_number = socket->seq_number;
-	header2.ack_number = socket->ack_number;
 	header2.control = ACK;
 
 	if (send_header(socket, &header2, address, address_len))
@@ -210,7 +234,6 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 
 	return 0;
 }
-
 
 
 int
@@ -230,8 +253,7 @@ microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address,
 	socket->state = LISTEN;
 
 	microtcp_header_t header = { 0 };
-	header.seq_number = rand32();
-	header.ack_number = socket->ack_number;
+	socket->seq_number = rand32();
 	header.control = ACK | SYN;
 
 	if (send_header(socket, &header, address, address_len))
@@ -254,70 +276,50 @@ microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address,
 	return 0;
 }
 
-static int shutdown_server(microtcp_sock_t *socket, int how) {
-	ssize_t s;
+int shutdown_server(microtcp_sock_t *socket, int how) {
 
 	microtcp_header_t ack_header = { 0 };
-	ack_header.seq_number = socket->seq_number;
-	ack_header.ack_number = socket->ack_number;
 	ack_header.control = ACK;
-	create_checksum(&ack_header);
 
-	header_to_net(&ack_header);
-	s = sendto(socket->sd, &ack_header, sizeof(ack_header), 0, socket->address, socket->address_len);
-	if (s != sizeof(microtcp_header_t)) {
+	if (send_header(socket, &ack_header, socket->address, socket->address_len))
 		return -1;
-	}
 
 	socket->seq_number++;
 
 	microtcp_header_t fin_header = { 0 };
-	fin_header.seq_number = socket->seq_number;
-	fin_header.ack_number = socket->ack_number;
 	fin_header.control = FIN | ACK;
-	create_checksum(&fin_header);
 
-	header_to_net(&fin_header);
-	s = sendto(socket->sd, &fin_header, sizeof(fin_header), 0, socket->address, socket->address_len);
-	if (s != sizeof(microtcp_header_t)) {
+	if (send_header(socket, &fin_header, socket->address, socket->address_len))
 		return -1;
-	}
-
 
 	microtcp_header_t closing_header = { 0 };
-	s = recvfrom(socket->sd, &closing_header, sizeof(closing_header), 0, socket->address, &socket->address_len);
-	header_to_host(&closing_header);
+	if (receive_header(socket, &closing_header, socket->address, socket->address_len))
+		return -1;
+	
 	check_checksum_header(closing_header);
 
-	if (closing_header.control != ACK || s != sizeof(closing_header)) {
+	if (closing_header.control != ACK) {
 		return -1;
 	}
 
 	socket->state = CLOSED;
 }
 
-static int shutdown_client(microtcp_sock_t *socket, int how) {
-	ssize_t s;
+int shutdown_client(microtcp_sock_t *socket, int how) {
 
 	microtcp_header_t fin_header = { 0 };
-	fin_header.control = 9;
-	fin_header.seq_number = socket->seq_number;
-	fin_header.ack_number = socket->ack_number;
-	create_checksum(&fin_header);
+	fin_header.control = ACK | FIN;
 
-	header_to_net(&fin_header);
-	s = sendto(socket->sd, &fin_header, sizeof(fin_header), 0, socket->address, socket->address_len);
-	if (s != sizeof(microtcp_header_t)) {
+	if (send_header(socket, &fin_header, socket->address, socket->address_len))
 		return -1;
-	}
 
 	microtcp_header_t h;
 
 	microtcp_header_t ack_header = { 0 };
-	// microtcp_header_t fin_header = { 0 };
 
-	s = recvfrom(socket->sd, &h, sizeof(h), 0, socket->address, &socket->address_len);
-	header_to_host(&h);
+	if (receive_header(socket, &h, socket->address, socket->address_len))
+		return -1;
+
 	check_checksum_header(h);
 	if (h.control == ACK) {
 		socket->state = CLOSING_BY_HOST;
@@ -325,32 +327,31 @@ static int shutdown_client(microtcp_sock_t *socket, int how) {
 	}
 	else {
 		fin_header = h;
+
 	}
 
-	s = recvfrom(socket->sd, &h, sizeof(h), 0, socket->address, &socket->address_len);
-	header_to_host(&h);
+	if (receive_header(socket, &h, socket->address, socket->address_len))
+		return -1;
+
 	check_checksum_header(h);
-	if (h.control == (ACK | FIN)) {
+	if (h.control == ACK) {
 		socket->state = CLOSING_BY_HOST;
 		ack_header = h;
 	}
 	else {
 		fin_header = h;
+
 	}
 
 	// TODO: check if both headers arrived
+	socket->seq_number = ack_header.ack_number;
+	socket->ack_number = fin_header.seq_number + 1;
 
 	microtcp_header_t closing_header = { 0 };
 	closing_header.control = ACK;
-	closing_header.seq_number = ack_header.ack_number;
-	closing_header.ack_number = fin_header.seq_number + 1;
-	create_checksum(&closing_header);
 
-	header_to_net(&closing_header);
-	s = sendto(socket->sd, &closing_header, sizeof(closing_header), 0, socket->address, socket->address_len);
-	if (s != sizeof(microtcp_header_t)) {
+	if (send_header(socket, &closing_header, socket->address, socket->address_len))
 		return -1;
-	}
 
 	socket->state = CLOSED;
 }
