@@ -59,8 +59,8 @@ main(int argc, char **argv)
 	microtcp_header_t rec_header = { 0 };
 	do {
 		recv(socket.sd, &rec_header, sizeof(microtcp_header_t), 0);
-		rec_header.control = htons(rec_header.control);
-		printf("Received header:\n")
+		header_to_net(&rec_header);
+		printf("Received header:\n");
 		print_header(&rec_header);
 	} while(!(rec_header.control & 1));
 
