@@ -21,6 +21,8 @@
 
 // TODO: set ack_number and seq_number to socket struct.
 
+//testing 
+
 #include "microtcp.h"
 #include "../utils/crc32.h"
 #include <stdlib.h>
@@ -459,21 +461,27 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 
 	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
 	microtcp_header_t header = { 0 };
-
 	while (data_sent < length) {
 		size_t bytes_to_send = min3(flow_ctrl_win, socket->cwnd, remaining);
 		size_t chunks = bytes_to_send / MICROTCP_MSS;
 
-		header.data_len = MICROTCP_MS;
+		header.data_len = MICROTCP_MSS;
 		header.ack_number = socket->ack_number;
 		for (int i = 0; i < chunks; i++){
-			// TODO: convert to network byte order!
 			header.seq_number = socket->seq_number;
+			header.checksum =0;
 
 			printf("Sending packet with seq number %u\n", header.seq_number);
 			
 			memcpy(packet, &header, sizeof(microtcp_header_t));
 			memcpy(packet + sizeof(microtcp_header_t), buffer + (i * MICROTCP_MSS), MICROTCP_MSS);
+
+			uint32_t full_checksum = crc32((uint8_t*)packet, sizeof(microtcp_header_t) + header.data_len);
+			((microtcp_header_t*)packet)->checksum = full_checksum;
+
+			// TODO: convert to network byte order!
+			//header_to_net_packert(&packet);
+
 			sendto(socket->sd, packet, sizeof(microtcp_header_t) + header.data_len, 0, socket->address, socket->address_len);
 
 			printf("data length after send: %u", header.data_len);
@@ -482,23 +490,48 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 		/* Check if there is a semi - filled chunk
 		*/
 		if (bytes_to_send % MICROTCP_MSS) {
+			header.checksum =0;
+			// TODO: Compute checksum
 			header.seq_number = socket->seq_number;
 			header.ack_number = socket->ack_number;
 			header.data_len = bytes_to_send - chunks * MICROTCP_MSS;
 			
 			memcpy(packet, &header, sizeof(microtcp_header_t));
 			memcpy(packet + sizeof(microtcp_header_t), buffer + (chunks * MICROTCP_MSS), header.data_len);
+
+			uint32_t full_checksum = crc32((uint8_t*)packet, sizeof(microtcp_header_t) + header.data_len);
+			((microtcp_header_t*)packet)->checksum = full_checksum;
+
 			sendto(socket->sd, packet, sizeof(microtcp_header_t) + header.data_len, 0, socket->address, socket->address_len);
 
 			chunks++;
-			socket->seq_number += header.data_len;
+			socket->seq_number += header.data_len;;
 		}
 
 		/* Get the ACKs */
+		microtcp_header_t* ack_header = malloc(sizeof(microtcp_header_t));
+		uint32_t last_ack = 0;
+		int dupcount = 1;
 		for (int i = 0; i < chunks; i++) {
-			// recvfrom();
-			/* check correct ACK numbers that arrived */
+			recvfrom(socket->sd, ack_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			header_to_host(ack_header);
+			printf("Received ack  %u\n", ack_header->ack_number);
+			//TODO network to host
+			//TODO check for ack checksum or someting
+			//TODO timeouts (retrasmit from last ack)
+
+			// 3dup retrasmisions
+			if (last_ack == ack_header->ack_number) {
+				dupcount++;
+			}else{
+				dupcount = 1;
+				last_ack = ack_header->ack_number;
+			}
 			/* 3 duplicate retransmission */
+			if(dupcount == 3){
+				printf("3 duplicate acks for %u, retransmitting\n", last_ack);
+				// TODO: retransmit from last_ack
+			}
 		}
 		/* Retransmissions */
 
@@ -513,27 +546,65 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 	return data_sent;
 }
 
+void send_ack(microtcp_sock_t *socket) {
+	microtcp_header_t ack_header = { 0 };
+	ack_header.control = ACK;
+	ack_header.window = socket->my_curr_win_size;	
+	ack_header.ack_number = socket->ack_number;
+	// send ack
+	send_header(socket, &ack_header, socket->address, socket->address_len);
+}
 ssize_t
 microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {
+	// TODO; this needs to be done before here, ack got a value one time higher than should
+	static int x =0;
+	if(x==0){
+		socket->ack_number --;
+		x++;
+	}
 	/* receive packet */
-
+	int total_size = 0;
 	size_t received = 0;
-
+	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+	microtcp_header_t *header;
 	while (received < length) {
-		recvfrom(socket->sd, buffer, MICROTCP_MSS + sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
-		printf("seq_number received: %d\n", ((microtcp_header_t*)buffer)->seq_number);
-		buffer += MICROTCP_MSS + sizeof(microtcp_header_t);
-		received += MICROTCP_MSS + sizeof(microtcp_header_t);
+		recvfrom(socket->sd, packet, MICROTCP_MSS + sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+		header = (microtcp_header_t*)packet;
+		total_size =  header->data_len + sizeof(microtcp_header_t);
+		// TODO: network to host bytes
+		// TODO: window size implementation
+
+		// Compute checksum and verify
+		u_int32_t rec_checksum = header->checksum;
+		header->checksum = 0;
+		u_int32_t calculated_checksum = crc32((uint8_t*)packet, total_size);
+		if (rec_checksum!= calculated_checksum){
+			printf("Error in checksum! Dropping packet with seq number %u\n",header->seq_number);
+			// send back ACK for last correct packet
+			socket->seq_number += sizeof(microtcp_header_t);
+			send_ack(socket);
+			continue;
+		}
+		if(socket->ack_number != header->seq_number ){
+			printf("Out of order packet! Dropping packet with seq number %u, expected %u\n",header->seq_number, socket->ack_number);
+			socket->seq_number += sizeof(microtcp_header_t);
+			send_ack(socket);
+			continue;
+		}
+		printf("Sended ack for packet with seq number: %u\n", header->seq_number);
+		// update ack and seq numbers
+		socket->ack_number += header->data_len;
+		socket->seq_number += sizeof(microtcp_header_t);
+		// send back ACK
+		send_ack(socket);
+		// copy data to buffer
+		memcpy(buffer,packet,total_size);
+
+		// TODO: we should not deliver headers, only data!!!! must change
+		buffer += total_size;
+		received += total_size;
 	}
 
 	/* check FIN bit -> shutdown server */
-
-	/* error checking and order checking */
-
-	/* put into buffer */
-
-	/* update window size, ... */
-
-	/* send ACK and remaining window size */
 }
