@@ -28,6 +28,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 int
 main(int argc, char **argv)
@@ -48,6 +49,9 @@ main(int argc, char **argv)
 
 	struct sockaddr client_addr;
 
+
+	printf("Server: waiting for incoming connection...\n");
+
 	int ret = microtcp_accept(&socket, &client_addr, sizeof(struct sockaddr));
 
 	if (ret) {
@@ -56,13 +60,18 @@ main(int argc, char **argv)
 
 	printf("Server: connection established\n");
 
-	microtcp_header_t rec_header = { 0 };
+	char *data = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+
+	microtcp_header_t* rec_header; // = { 0 };
 	do {
-		recv(socket.sd, &rec_header, sizeof(microtcp_header_t), 0);
-		header_to_net(&rec_header);
+		// recv(socket.sd, data, MICROTCP_MSS + sizeof(microtcp_header_t), 0);
+		microtcp_recv(&socket, data, MICROTCP_MSS + sizeof(microtcp_header_t), 0);
+		rec_header = (microtcp_header_t*)data;
+		printf("data: %u\n", (int)data[sizeof(microtcp_header_t)]);
+/*		header_to_net(&rec_header);
 		printf("Received header:\n");
-		print_header(&rec_header);
-	} while(!(rec_header.control & 1));
+		print_header(&rec_header);*/
+	} while(!(rec_header->control & 1));
 
 	socket.state = CLOSING_BY_PEER;
 	microtcp_shutdown(&socket, 0);

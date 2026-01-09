@@ -46,7 +46,7 @@ main(int argc, char **argv)
 
 	microtcp_sock_t socket = microtcp_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
-	// microtcp_bind(&socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
+	printf("Client: connecting to server...\n");
 
 	int ret = microtcp_connect(&socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_in));
 
@@ -55,6 +55,14 @@ main(int argc, char **argv)
 	}
 
 	printf("Client: connection established\n");
+
+
+	char *data = malloc(MICROTCP_MSS);
+
+	for (int i = 0; i < 10; i++) {
+		memset(data, i, MICROTCP_MSS);
+		microtcp_send(&socket, data, MICROTCP_MSS, 0);
+	}
 
 	microtcp_shutdown(&socket, 0);
 

@@ -65,6 +65,12 @@ typedef struct
   size_t init_win_size;         /**< The window size negotiated at the 3-way handshake */
   size_t curr_win_size;         /**< The current window size */
 
+  size_t my_init_win_size;
+  size_t my_curr_win_size;
+
+  struct sockaddr *address;
+  socklen_t address_len;
+
   uint8_t *recvbuf;             /**< The *receive* buffer of the TCP
                                      connection. It is allocated during the connection establishment and
                                      is freed at the shutdown of the connection. This buffer is used
@@ -74,17 +80,14 @@ typedef struct
   size_t cwnd;
   size_t ssthresh;
 
-  size_t seq_number;            /**< Keep the state of the sequence number: The last ACK number we received || The next seq number to send */
-  size_t ack_number;            /**< Keep the state of the ack number: Last sequence number received + 1 || The new ACK number to send */
+  size_t seq_number;            /**< Keep the state of the sequence number */
+  size_t ack_number;            /**< Keep the state of the ack number */
   uint64_t packets_send;
   uint64_t packets_received;
   uint64_t packets_lost;
   uint64_t bytes_send;
   uint64_t bytes_received;
   uint64_t bytes_lost;
-
-  struct sockaddr *address;
-  socklen_t address_len;
 } microtcp_sock_t;
 
 
