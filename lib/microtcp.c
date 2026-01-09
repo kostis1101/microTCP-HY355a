@@ -464,10 +464,11 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 		size_t bytes_to_send = min3(flow_ctrl_win, socket->cwnd, remaining);
 		size_t chunks = bytes_to_send / MICROTCP_MSS;
 
+		header.data_len = MICROTCP_MS;
+		header.ack_number = socket->ack_number;
 		for (int i = 0; i < chunks; i++){
+			// TODO: convert to network byte order!
 			header.seq_number = socket->seq_number;
-			header.ack_number = socket->ack_number;
-			header.data_len = MICROTCP_MSS;
 
 			printf("Sending packet with seq number %u\n", header.seq_number);
 			
