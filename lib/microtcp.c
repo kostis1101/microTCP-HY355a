@@ -498,7 +498,6 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 	size_t data_sent = 0;
 	size_t flow_ctrl_win = socket->curr_win_size;
 
-	uint32_t first_seq_number = socket->seq_number;
 
 	printf("Client: sending data (start)\n");
 
@@ -508,6 +507,8 @@ start_send:
 		size_t bytes_to_send = min3(flow_ctrl_win, socket->cwnd, remaining);
 		size_t chunks = bytes_to_send / MICROTCP_MSS + (int)(bytes_to_send % MICROTCP_MSS != 0);
 
+		uint32_t first_seq_number = socket->seq_number;
+	
 		size_t buffer_index = 0;
 
 		header.ack_number = socket->ack_number;
@@ -544,7 +545,7 @@ start_send:
 		int dupcount = 1;
 		// (maybe?): possibly, instead of a for loop, check a while loop until an ACK of the last sequence number is given.
 		for (int i = 0; i < chunks; i++) {
-			ssize_t ret = recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			ssize_t ret = recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
 			if (ret < 0) {
 				printf("[DEBUG] Packet timeout, retransmit...\n");
 				goto retransmit;
@@ -556,6 +557,11 @@ start_send:
 				goto retransmit;
 			}
 
+			if (ack_header.ack_number < last_ack)
+				continue;
+
+			flow_ctrl_win = ack_header.window;
+
 			// 3dup retrasmisions
 			if (last_ack == ack_header.ack_number) {
 				dupcount++;
@@ -564,7 +570,7 @@ start_send:
 				last_ack = ack_header.ack_number;
 			}
 			/* 3 duplicate retransmission */
-			if (dupcount == 3){
+			if (dupcount == 3) {
 				printf("3 duplicate acks for %u, retransmitting\n", last_ack);
 retransmit:
 				buffer += last_ack - first_seq_number; // move buffer to the first byte that was not trassmitted
@@ -575,8 +581,6 @@ retransmit:
 			}
 		}
 		socket->seq_number = last_ack;
-
-		/* Retransmissions */
 
 		/* Update window */
 
@@ -596,8 +600,10 @@ void send_ack(microtcp_sock_t *socket) {
 	ack_header.window = socket->my_curr_win_size;	
 	ack_header.ack_number = socket->ack_number;
 	// send ack
+	socket->seq_number--; // evil hack hahahaha
 	send_header(socket, &ack_header, socket->address, socket->address_len);
 }
+
 ssize_t
 microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {
@@ -610,42 +616,48 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 	microtcp_header_t *header;
 	while (received < length) {
 
-		recvfrom(socket->sd, packet, MICROTCP_MSS + sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+		recvfrom(socket->sd, packet, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
 		header = (microtcp_header_t*)packet;
-
 		header_to_host(header);
-		total_size =  header->data_len + sizeof(microtcp_header_t);
+
+		if (socket->ack_number != header->seq_number) {
+			printf("Out of order packet! Dropping packet with seq number %u, expected %u\n", header->seq_number, socket->ack_number);
+			send_ack(socket);
+			continue;
+		}
+
+		// no need to call receive if we have no data (optimization)
+		if (header->data_len)
+			recvfrom(socket->sd, packet + sizeof(microtcp_header_t), header->data_len, 0, socket->address, &socket->address_len);
+
+		total_size = header->data_len + sizeof(microtcp_header_t);
+
 		// TODO: network to host bytes
 		// TODO: window size implementation
 
 		// Compute checksum and verify
-		u_int32_t rec_checksum = header->checksum;
+		uint32_t rec_checksum = header->checksum;
 		header->checksum = 0;
-		u_int32_t calculated_checksum = crc32((uint8_t*)packet, total_size);
-		if (rec_checksum!= calculated_checksum){
+		uint32_t calculated_checksum = crc32((uint8_t*)packet, total_size);
+
+		if (rec_checksum != calculated_checksum){
 			printf("Error in checksum! Dropping packet with seq number %u\n",header->seq_number);
 			// send back ACK for last correct packet
-			socket->seq_number += sizeof(microtcp_header_t);
 			send_ack(socket);
 			continue;
 		}
-		if (socket->ack_number != header->seq_number ){
-			printf("Out of order packet! Dropping packet with seq number %u, expected %u\n",header->seq_number, socket->ack_number);
-			send_ack(socket);
-			exit(-1);
-			continue;
-		}
+
 		// update ack and seq numbers
 		socket->ack_number += header->data_len;
 		printf("Sended ack for packet with seq number: %u and ack number %u\n", header->seq_number, socket->ack_number);
 		// send back ACK
 		send_ack(socket);
 		// copy data to buffer
-		memcpy(buffer,packet,total_size);
+		memcpy(buffer, packet, header->data_len);
 
 		// TODO: we should not deliver headers, only data!!!! must change
-		buffer += total_size;
-		received += total_size;
+		buffer += header->data_len;
+		received += header->data_len;
 	}
 
 	/* check FIN bit -> shutdown server */

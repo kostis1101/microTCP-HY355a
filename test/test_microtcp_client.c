@@ -58,12 +58,12 @@ main(int argc, char **argv)
 	printf("Client: connection established\n");
 
 
-	char *data = malloc(MICROTCP_MSS);
+	char *data = malloc(MICROTCP_MSS * 10);
 
 	for (int i = 0; i < 10; i++) {
-		memset(data, i, MICROTCP_MSS);
-		microtcp_send(&socket, data, MICROTCP_MSS, 0);
+		memset(data + i * MICROTCP_MSS, i, MICROTCP_MSS);
 	}
+	microtcp_send(&socket, data, MICROTCP_MSS * 10, 0);
 
 	microtcp_shutdown(&socket, 0);
 

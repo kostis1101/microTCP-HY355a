@@ -60,18 +60,15 @@ main(int argc, char **argv)
 
 	printf("Server: connection established\n");
 
-	char *data = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+	char *data = malloc(MICROTCP_MSS * 10);
 
-	microtcp_header_t* rec_header; // = { 0 };
-	do {
-		// recv(socket.sd, data, MICROTCP_MSS + sizeof(microtcp_header_t), 0);
-		microtcp_recv(&socket, data, MICROTCP_MSS + sizeof(microtcp_header_t), 0);
-		rec_header = (microtcp_header_t*)data;
-		printf("data: %u\n", (int)data[sizeof(microtcp_header_t)]);
-/*		header_to_net(&rec_header);
-		printf("Received header:\n");
-		print_header(&rec_header);*/
-	} while(!(rec_header->control & 1));
+	microtcp_recv(&socket, data, MICROTCP_MSS * 10, 0);
+
+	for (int i = 0; i < 10; i++) {
+		printf("%d ", data[i * MICROTCP_MSS]);
+	}
+	putchar('\n');
+	fflush(stdout);
 
 	socket.state = CLOSING_BY_PEER;
 	microtcp_shutdown(&socket, 0);
