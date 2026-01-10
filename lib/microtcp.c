@@ -250,7 +250,6 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 	header.control = SYN;
 	header.window = socket->my_init_win_size;
 
-
 	socket->address = address;
 	socket->address_len = address_len;
 	
@@ -296,6 +295,8 @@ microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address,
 	if (setsockopt(socket->sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
 		perror("setsockopt failed");
 	}
+
+	socket->recv_buffer = malloc(MICROTCP_RECVBUF_LEN);
 
 	return 0;
 }
@@ -355,6 +356,8 @@ microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address,
 	if (setsockopt(socket->sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
 		perror("setsockopt failed");
 	}
+
+	socket->recv_buffer = malloc(MICROTCP_RECVBUF_LEN);
 
 	return 0;
 }
@@ -498,7 +501,6 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 	size_t data_sent = 0;
 	size_t flow_ctrl_win = socket->curr_win_size;
 
-
 	printf("Client: sending data (start)\n");
 
 	microtcp_header_t header = { 0 };
@@ -609,6 +611,10 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {
 	// TODO; this needs to be done before here, ack got a value one time higher than should
 	
+	if (socket->buf_fill_level) {
+		// deliver data from buffer
+	}
+
 	/* receive packet */
 	int total_size = 0;
 	size_t received = 0;
@@ -616,7 +622,7 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 	microtcp_header_t *header;
 	while (received < length) {
 
-		recvfrom(socket->sd, packet, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
+		total_size = recvfrom(socket->sd, packet, sizeof(microtcp_header_t) + MICROTCP_MSS, 0, socket->address, &socket->address_len);
 		header = (microtcp_header_t*)packet;
 		header_to_host(header);
 
@@ -625,12 +631,6 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 			send_ack(socket);
 			continue;
 		}
-
-		// no need to call receive if we have no data (optimization)
-		if (header->data_len)
-			recvfrom(socket->sd, packet + sizeof(microtcp_header_t), header->data_len, 0, socket->address, &socket->address_len);
-
-		total_size = header->data_len + sizeof(microtcp_header_t);
 
 		// TODO: network to host bytes
 		// TODO: window size implementation
@@ -650,14 +650,30 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		// update ack and seq numbers
 		socket->ack_number += header->data_len;
 		printf("Sended ack for packet with seq number: %u and ack number %u\n", header->seq_number, socket->ack_number);
+
+		// copy data to buffer
+		/*
+		memcpy(socket->recv_buffer, packet + sizeof(microtcp_header_t), header->data_len);
+		socket->buf_fill_level += header->data_len;
+		socket->my_curr_win_size -= header->data_len;
+
+		mempy(buffer, socket->recv_buffer + sizeof(microtcp_header_t), header->data_len);
+		socket->buf_fill_level -= header->data_len;
+		socket->my_curr_win_size += header->data_len;
+		*/
+
+		received += header->data_len;
+		memcpy(buffer, packet + sizeof(microtcp_header_t), min(header->data_len, (int)received - (int)length));
+
 		// send back ACK
 		send_ack(socket);
-		// copy data to buffer
-		memcpy(buffer, packet, header->data_len);
 
 		// TODO: we should not deliver headers, only data!!!! must change
 		buffer += header->data_len;
-		received += header->data_len;
+	}
+
+	if (received > length) {
+		memcpy(socket->recvbuf, packer + ??)
 	}
 
 	/* check FIN bit -> shutdown server */
