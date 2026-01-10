@@ -19,7 +19,21 @@
  */
 
 
-// TODO: set ack_number and seq_number to socket struct.
+/* +----------+
+ * |Suggestion|
+ * +----------+
+ * We can have two buffers that are statically allocated:
+ * - One for receiving packets
+ * - One for sending packets
+ * Since we know the maximum size of a packet, we can use those to receive and send data
+ * This way, we can split the receiving/sending part of the transmittion into separate function
+ * that set the header values, calculate the checksum and convert from/to network byte order.
+ * The receiving function will first read the header and then read the amount of bytes that are
+ * specified in the header.
+ * This can also be helpfull when receiving ACKs after sending packets: When waiting for an ACK
+ * we can to receive a whole packet (i.e. not just the header that we are receiving now) and check
+ * if that is an ACK (e.g. it might be a data packet that arrived late).
+ */
 
 //testing 
 
@@ -453,13 +467,22 @@ int min3(int a, int b, int c) {
 ssize_t
 microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int flags)
 {
+	// only allocate at start of the programme. No need to allocate every time.
+	// TODO: move packet as global variable to be allocated at begin of the connection.
+	static uint8_t *packet = NULL;
+	if (!packet)
+		packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+
+	// (maybe?): for speed, cache checksums to skip recomputation on lost packets (probably to much, only if we have too much time)
+
 	size_t remaining = length;
 	size_t data_sent = 0;
 	size_t flow_ctrl_win = socket->curr_win_size;
 
+	uint32_t first_seq_number = socket->seq_number;
+
 	printf("Client: sending data (start)\n");
 
-	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
 	microtcp_header_t header = { 0 };
 	while (data_sent < length) {
 		size_t bytes_to_send = min3(flow_ctrl_win, socket->cwnd, remaining);
@@ -469,7 +492,7 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 		header.ack_number = socket->ack_number;
 		for (int i = 0; i < chunks; i++){
 			header.seq_number = socket->seq_number;
-			header.checksum =0;
+			header.checksum = 0;
 
 			printf("Sending packet with seq number %u\n", header.seq_number);
 			
@@ -479,8 +502,9 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 			uint32_t full_checksum = crc32((uint8_t*)packet, sizeof(microtcp_header_t) + header.data_len);
 			((microtcp_header_t*)packet)->checksum = full_checksum;
 
-			// TODO: convert to network byte order!
-			//header_to_net_packert(&packet);
+			/* We only need to convert the header to network byte order.
+			   We cannot make any further assumption about the transmitted data */
+			header_to_net((microtcp_header_t*)&packet);
 
 			sendto(socket->sd, packet, sizeof(microtcp_header_t) + header.data_len, 0, socket->address, socket->address_len);
 
@@ -489,12 +513,13 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 		}
 		/* Check if there is a semi - filled chunk
 		*/
+		// TODO? : combine the if statement into the above for or make it into some standalone function for cleaner code
 		if (bytes_to_send % MICROTCP_MSS) {
-			header.checksum =0;
+			header.checksum = 0;
 			// TODO: Compute checksum
 			header.seq_number = socket->seq_number;
-			header.ack_number = socket->ack_number;
 			header.data_len = bytes_to_send - chunks * MICROTCP_MSS;
+			header.checksum = 0;
 			
 			memcpy(packet, &header, sizeof(microtcp_header_t));
 			memcpy(packet + sizeof(microtcp_header_t), buffer + (chunks * MICROTCP_MSS), header.data_len);
@@ -502,35 +527,43 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 			uint32_t full_checksum = crc32((uint8_t*)packet, sizeof(microtcp_header_t) + header.data_len);
 			((microtcp_header_t*)packet)->checksum = full_checksum;
 
+			header_to_net((microtcp_header_t*)&packet);
+
 			sendto(socket->sd, packet, sizeof(microtcp_header_t) + header.data_len, 0, socket->address, socket->address_len);
 
 			chunks++;
-			socket->seq_number += header.data_len;;
+			socket->seq_number += header.data_len;
 		}
 
 		/* Get the ACKs */
-		microtcp_header_t* ack_header = malloc(sizeof(microtcp_header_t));
+		microtcp_header_t ack_header;
 		uint32_t last_ack = 0;
 		int dupcount = 1;
+		// (maybe?): possibly, instead of a for loop, check a while loop until an ACK of the last sequence number is given.
 		for (int i = 0; i < chunks; i++) {
-			recvfrom(socket->sd, ack_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
-			header_to_host(ack_header);
-			printf("Received ack  %u\n", ack_header->ack_number);
+			recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			header_to_host(&ack_header);
+			printf("Received ack  %u\n", ack_header.ack_number);
 			//TODO network to host
 			//TODO check for ack checksum or someting
 			//TODO timeouts (retrasmit from last ack)
 
 			// 3dup retrasmisions
-			if (last_ack == ack_header->ack_number) {
+			if (last_ack == ack_header.ack_number) {
 				dupcount++;
-			}else{
+			} else {
 				dupcount = 1;
-				last_ack = ack_header->ack_number;
+				last_ack = ack_header.ack_number;
 			}
 			/* 3 duplicate retransmission */
-			if(dupcount == 3){
-				printf("3 duplicate acks for %u, retransmitting\n", last_ack);
-				// TODO: retransmit from last_ack
+			if (dupcount == 3){
+				printf("3 duplicate acks for %lu, retransmitting\n", last_ack);
+
+				buffer += last_ack - first_seq_number; // move buffer to the first byte that was not trassmitted
+				socket->seq_number = last_ack;
+				data_sent = last_ack - first_seq_number; // update number of data sent
+				remaining = length - data_sent;
+				continue; // start all over from the first lost byte
 			}
 		}
 		/* Retransmissions */
@@ -541,6 +574,7 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 
 		remaining -= bytes_to_send;
 		data_sent += bytes_to_send;
+		buffer += bytes_to_send; // move buffer pointer to first untrassmitted byte
 	}
 
 	return data_sent;
