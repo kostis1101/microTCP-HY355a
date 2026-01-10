@@ -76,6 +76,7 @@ typedef struct
                                      is freed at the shutdown of the connection. This buffer is used
                                      to retrieve the data from the network. */
   size_t buf_fill_level;        /**< Amount of data in the buffer */
+  uint16_t buf_first_index;     /**< The first index of the byte in the receive buffer */
 
   size_t cwnd;
   size_t ssthresh;
