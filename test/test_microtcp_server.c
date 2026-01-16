@@ -60,18 +60,18 @@ main(int argc, char **argv)
 
 	printf("Server: connection established\n");
 
-	char *data = malloc(MICROTCP_MSS * 10);
+	int N = 9;
+	char *data = malloc(MICROTCP_MSS * N);
 
-	microtcp_recv(&socket, data, MICROTCP_MSS * 10, 0);
+	microtcp_recv(&socket, data, MICROTCP_MSS * N, 0);
 
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < N; i++) {
 		printf("%d ", data[i * MICROTCP_MSS]);
 	}
 	putchar('\n');
 	fflush(stdout);
 
-	socket.state = CLOSING_BY_PEER;
-	microtcp_shutdown(&socket, 0);
+	microtcp_recv(&socket, data, 100, 0);
 
 	printf("Server: connetion shutdown\n");
 }
