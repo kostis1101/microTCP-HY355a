@@ -86,14 +86,6 @@ microtcp_sock_t microtcp_socket (int domain, int type, int protocol)
 	socket.cwnd = MICROTCP_INIT_CWND;
 	socket.ssthresh = MICROTCP_INIT_SSTHRESH;
 
-	struct timeval timeout;
-	timeout.tv_sec = 0;
-	timeout.tv_usec = MICROTCP_ACK_TIMEOUT_US;
-
-	if (setsockopt(socket.sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
-		perror("setsockopt failed");
-	}
-
 	return socket;
 }
 
@@ -245,8 +237,7 @@ static int rand32() {
 }
 
 // client side connect
-int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, socklen_t address_len)
-{
+int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, socklen_t address_len) {
 	microtcp_header_t header = { 0 };
 	socket->seq_number = rand32();
 	socket->ack_number = 0;
@@ -255,6 +246,15 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 
 	socket->address = address;
 	socket->address_len = address_len;
+
+	/*
+	struct timeval timeout;
+	timeout.tv_sec = 0;
+	timeout.tv_usec = MICROTCP_ACK_TIMEOUT_US;
+
+	if (setsockopt(socket->sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
+		perror("setsockopt failed");
+	}*/
 	
 	// step 1: send SYN
 	if (send_header(socket, &header, address, address_len))
@@ -272,7 +272,9 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 
 	if (ret.control != (ACK | SYN)) {
 		socket->state = INVALID;
-		printf("INVALID HEADER\n");
+		#if DEBUG
+			printf("INVALID HEADER\n");
+		#endif
 		return -1;
 	}
 
@@ -298,8 +300,7 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 
 
 // server side accept
-int microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address, socklen_t address_len)
-{
+int microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address, socklen_t address_len) {
 
 	microtcp_header_t client_rec;
 	// wait for syn
@@ -347,7 +348,10 @@ int microtcp_accept (microtcp_sock_t *socket, struct sockaddr *address, socklen_
 	timeout.tv_usec = MICROTCP_ACK_TIMEOUT_US;
 
 	if (setsockopt(socket->sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
-		perror("setsockopt failed");
+		#if DEBUG
+			perror("setsockopt failed");
+		#endif
+		return -1;
 	}
 
 	socket->recvbuf = malloc(MICROTCP_RECVBUF_LEN);
@@ -500,8 +504,6 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 	size_t data_sent = 0;
 	size_t flow_ctrl_win = socket->curr_win_size;
 
-	printf("Client: sending data (start)\n");
-
 	microtcp_header_t header = { 0 };
 	while (data_sent < length) {
 start_send:
@@ -519,9 +521,9 @@ start_send:
 
 			header.data_len = (bytes_to_send - buffer_index > MICROTCP_MSS) ? MICROTCP_MSS : (bytes_to_send - buffer_index);
 
-			printf("Sending packet with seq number %u\n", header.seq_number);
-
-			printf("[DEBUG] buffer_index %u\n", buffer_index);
+			#if DEBUG
+				printf("Sending packet with seq number %u\n", header.seq_number);
+			#endif
 			
 			memcpy(packet, &header, sizeof(microtcp_header_t));
 			memcpy(packet + sizeof(microtcp_header_t), buffer + buffer_index, header.data_len);
@@ -535,7 +537,6 @@ start_send:
 
 			sendto(socket->sd, packet, sizeof(microtcp_header_t) + header.data_len, 0, socket->address, socket->address_len);
 
-			printf("data length after send: %u\n", header.data_len);
 			header.seq_number += header.data_len;
 			buffer_index += header.data_len;
 		}
@@ -548,12 +549,16 @@ start_send:
 		for (int i = 0; i < chunks; i++) {
 			ssize_t ret = recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
 			if (ret < 0) {
-				printf("[DEBUG] Packet timeout, retransmit...\n");
+				#if DEBUG
+					printf("[DEBUG] Packet timeout, retransmit...\n");
+				#endif
 				goto retransmit;
 			}
 
 			header_to_host(&ack_header);
-			printf("Received ack  %u\n", ack_header.ack_number);
+			#if DEBUG
+				printf("Received ack  %u\n", ack_header.ack_number);
+			#endif
 			if (!__check_checksum_header(ack_header)) {
 				goto retransmit;
 			}
@@ -572,7 +577,9 @@ start_send:
 			}
 			/* 3 duplicate retransmission */
 			if (dupcount == 3) {
-				printf("3 duplicate acks for %u, retransmitting\n", last_ack);
+				#if DEBUG
+					printf("3 duplicate acks for %u, retransmitting\n", last_ack);
+				#endif
 retransmit:
 				buffer += last_ack - first_seq_number; // move buffer to the first byte that was not trassmitted
 				socket->seq_number = last_ack;
@@ -610,6 +617,15 @@ ssize_t
 microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {
 	// TODO; this needs to be done before here, ack got a value one time higher than should
+
+	if (socket->state == CLOSED)
+		return 0;
+
+	int total_size = 0;
+	size_t received = 0;
+	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+	microtcp_header_t *header;
+	size_t copy_to_user_data;
 	
 	if (socket->buf_fill_level) {
 		if (socket->buf_fill_level >= length) {
@@ -620,32 +636,35 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		else {
 			memcpy(buffer, socket->recvbuf, socket->buf_fill_level);
 			buffer += socket->buf_fill_level;
-			length -= socket->buf_fill_level;
+			received += socket->buf_fill_level;
 			socket->buf_fill_level = 0;
 		}
 	}
 	
-	void *start_buffer = buffer;
-
 	/* receive packet */
-	int total_size = 0;
-	size_t received = 0;
-	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
-	microtcp_header_t *header;
-	size_t copy_to_user_data;
 	while (received < length) {
 
 		total_size = recvfrom(socket->sd, packet, sizeof(microtcp_header_t) + MICROTCP_MSS, 0, socket->address, &socket->address_len);
+
+		if (total_size == -1)
+			return 0;
+
 		header = (microtcp_header_t*)packet;
 		header_to_host(header);
 
 		if (header->control & FIN) {
+			#if DEBUG
+				printf("Received FIN header\n");
+			#endif
 			socket->state = CLOSING_BY_PEER;
-			shutdown(socket, 0);
+			microtcp_shutdown(socket, 0);
+			return received;
 		}
 
 		if (socket->ack_number != header->seq_number) {
-			printf("Out of order packet! Dropping packet with seq number %u, expected %u\n", header->seq_number, socket->ack_number);
+			#if DEBUG
+				printf("Out of order packet! Dropping packet with seq number %u, expected %u\n", header->seq_number, socket->ack_number);
+			#endif
 			send_ack(socket);
 			continue;
 		}
@@ -659,7 +678,9 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		uint32_t calculated_checksum = crc32((uint8_t*)packet, total_size);
 
 		if (rec_checksum != calculated_checksum){
-			printf("Error in checksum! Dropping packet with seq number %u\n",header->seq_number);
+			#if DEBUG
+				printf("Error in checksum! Dropping packet with seq number %u\n",header->seq_number);
+			#endif
 			// send back ACK for last correct packet
 			send_ack(socket);
 			continue;
@@ -679,9 +700,10 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 			socket->my_curr_win_size += header->data_len;
 		*/
 
+
+
 		received += header->data_len;
 		copy_to_user_data = received <= length ? header->data_len : header->data_len - (received - length);
-		printf("%lu\n", copy_to_user_data);
 		memcpy(buffer, packet + sizeof(microtcp_header_t), copy_to_user_data);
 		buffer += copy_to_user_data;
 
@@ -692,10 +714,12 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 
 		// send back ACK
 		send_ack(socket);
-		printf("Sended ack for packet with seq number: %u and ack number %u\n", header->seq_number, socket->ack_number);
+		#if DEBUG
+			printf("Sended ack for packet with seq number: %u and ack number %u\n", header->seq_number, socket->ack_number);
+		#endif
 	}
 
-	// TODO: handle full buffer
+	return received;
 
-	/* check FIN bit -> shutdown server */
+	// TODO: handle full buffer
 }

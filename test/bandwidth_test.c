@@ -194,7 +194,7 @@ server_microtcp (uint16_t listen_port, const char *file)
 		fclose (fp);
 		return -EXIT_FAILURE;
 	}*/
-	sock = microtcp_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	sock = microtcp_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 	memset(&sin, 0, sizeof(struct sockaddr_in));
 	sin.sin_family = AF_INET;
@@ -219,7 +219,7 @@ server_microtcp (uint16_t listen_port, const char *file)
 	/* Accept a connection from the client */
 	client_addr_len = sizeof(struct sockaddr);
 	printf("accepting connections\n");
-	accepted = microtcp_accept(&sock, &client_addr, &client_addr_len);
+	accepted = microtcp_accept(&sock, &client_addr, client_addr_len);
 	if (accepted < 0) {
 		perror ("TCP accept");
 		printf("ERROR accepting\n");
@@ -376,7 +376,7 @@ client_microtcp (const char *serverip, uint16_t server_port, const char *file)
 		fclose (fp);
 		return -EXIT_FAILURE;
 	}*/
-	sock = microtcp_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	sock = microtcp_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 	struct sockaddr_in sin;
 	memset (&sin, 0, sizeof(struct sockaddr_in));
@@ -418,6 +418,7 @@ client_microtcp (const char *serverip, uint16_t server_port, const char *file)
 	}
 
 	printf ("Data sent. Terminating...\n");
+	sock.state = CLOSING_BY_HOST;
 	microtcp_shutdown(&sock, SHUT_RDWR);
 	free (buffer);
 	fclose (fp);
