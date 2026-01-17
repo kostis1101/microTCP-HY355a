@@ -61,6 +61,8 @@ static int set_seed = 0;
 #define DEBUG 0
 #define THANOS_DEBUG 0
 
+#define DISABLE_CHECKSUM 1
+
 
 #define create_checksum(header) (header)->checksum = crc32((uint8_t*)(header), sizeof(microtcp_header_t))
 
@@ -135,11 +137,13 @@ static int __check_checksum_header(microtcp_header_t header) {
 	header.checksum = 0;
 
 	// calculate checksum of received header
+	#if !DISABLE_CHECKSUM
 	uint32_t cs = crc32((uint8_t*)&header, sizeof(microtcp_header_t));
 
 	// verify data integrity
 	if (cs != rec_cs)
 		return 0;
+	#endif // !DISABLE_CHECKSUM
 
 	return 1;
 }
@@ -528,8 +532,10 @@ start_send:
 			memcpy(packet, &header, sizeof(microtcp_header_t));
 			memcpy(packet + sizeof(microtcp_header_t), buffer + buffer_index, header.data_len);
 
+			#if !DISABLE_CHECKSUM
 			uint32_t full_checksum = crc32((uint8_t*)packet, sizeof(microtcp_header_t) + header.data_len);
 			((microtcp_header_t*)packet)->checksum = full_checksum;
+			#endif
 
 			/* We only need to convert the header to network byte order.
 			   We cannot make any further assumption about the transmitted data */
@@ -675,6 +681,7 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		// Compute checksum and verify
 		uint32_t rec_checksum = header->checksum;
 		header->checksum = 0;
+		#if !DISABLE_CHECKSUM
 		uint32_t calculated_checksum = crc32((uint8_t*)packet, total_size);
 
 		if (rec_checksum != calculated_checksum){
@@ -685,6 +692,7 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 			send_ack(socket);
 			continue;
 		}
+		#endif // !DISABLE_CHECKSUM
 
 		// update ack and seq numbers
 		socket->ack_number += header->data_len;
