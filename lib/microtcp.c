@@ -554,10 +554,18 @@ start_send:
 		// (maybe?): possibly, instead of a for loop, check a while loop until an ACK of the last sequence number is given.
 		for (int i = 0; i < chunks; i++) {
 			ssize_t ret = recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
+
+			// Timeout
 			if (ret < 0) {
 				#if DEBUG
 					printf("[DEBUG] Packet timeout, retransmit...\n");
 				#endif
+
+				// handle congestion control on timeout
+				socket->ssthresh = (socket->cwnd)/2;
+				socket->cwnd = min2( MICROTCP_MSS , socket->ssthresh);
+
+				// retransmit
 				goto retransmit;
 			}
 
@@ -586,6 +594,10 @@ start_send:
 				#if DEBUG
 					printf("3 duplicate acks for %u, retransmitting\n", last_ack);
 				#endif
+				// handle congestion control on 3 dup acks
+				socket->ssthresh = (socket->cwnd)/2;
+				socket->cwnd = (socket->cwnd)/2 + MICROTCP_MSS;
+				// fast retransmit
 retransmit:
 				buffer += last_ack - first_seq_number; // move buffer to the first byte that was not trassmitted
 				socket->seq_number = last_ack;
@@ -593,13 +605,51 @@ retransmit:
 				remaining = length - data_sent;
 				goto start_send; // start all over from the first lost byte
 			}
+
+			// TODO : need to check if not second duplicate ack
+
+			// Handle slow start and congestion avoidance
+			if (socket->cwnd < socket->ssthresh) {
+				// slow start
+				#if DEBUG
+					printf("Slow start: cwnd = %u\n", socket->cwnd);
+				#endif
+				socket->cwnd += MICROTCP_MSS;
+			} else {
+				// congestion avoidance
+				#if DEBUG
+					printf("Congestion avoidance: cwnd = %u\n", socket->cwnd);	
+				#endif
+				socket->cwnd += (MICROTCP_MSS * MICROTCP_MSS) / socket->cwnd;
+			}
 		}
 		socket->seq_number = last_ack;
 		socket->curr_win_size = ack_header.window;
 
-		/* Update window */
-
-		/* Update congestion control */
+		// if window is 0, wait for window update
+		while(socket->curr_win_size == 0){
+			#if DEBUG
+				printf("Window size is 0, waiting for window update...\n");
+			#endif
+			// sleep random
+			usleep(rand() % MICROTCP_ACK_TIMEOUT_US);
+			// create win header
+			microtcp_header_t win_header = {0};
+			header_to_net(&win_header);
+			size_t s = sendto(socket->sd, &win_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			if (s != sizeof(microtcp_header_t)) {
+				socket->state = INVALID;
+				return -1;
+			}
+			// wait for ack
+			s = recvfrom(socket->sd, &win_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			header_to_host(&win_header);
+			if(!__check_checksum_header(win_header)){
+				continue;
+			}
+			// update_window_size
+			socket->curr_win_size = win_header.window;
+		}
 
 		remaining -= bytes_to_send;
 		data_sent += bytes_to_send;
@@ -622,7 +672,6 @@ void send_ack(microtcp_sock_t *socket) {
 ssize_t
 microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {
-	// TODO; this needs to be done before here, ack got a value one time higher than should
 
 	if (socket->state == CLOSED)
 		return 0;
@@ -658,6 +707,16 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		header = (microtcp_header_t*)packet;
 		header_to_host(header);
 
+		// check if window size was 0
+		if((header->data_len == 0 && header->control == 0)) {
+			// update window size
+			header->control = ACK;
+			header->window = socket->my_init_win_size - socket->buf_fill_level;
+			header_to_net(header);
+			size_t s = sendto(socket->sd, header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			continue;
+		}
+
 		if (header->control & FIN) {
 			#if DEBUG
 				printf("Received FIN header\n");
@@ -674,9 +733,6 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 			send_ack(socket);
 			continue;
 		}
-
-		// TODO: network to host bytes
-		// TODO: window size implementation
 
 		// Compute checksum and verify
 		uint32_t rec_checksum = header->checksum;
@@ -728,6 +784,4 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 	}
 
 	return received;
-
-	// TODO: handle full buffer
 }
