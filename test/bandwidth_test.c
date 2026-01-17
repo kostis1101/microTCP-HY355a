@@ -251,6 +251,8 @@ server_microtcp (uint16_t listen_port, const char *file)
 			return -EXIT_FAILURE;
 		}
 	}
+
+
 	clock_gettime (CLOCK_MONOTONIC_RAW, &end_time);
 	print_statistics (total_bytes, start_time, end_time);
 

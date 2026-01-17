@@ -157,9 +157,9 @@ static int __check_checksum_header(microtcp_header_t header) {
 
 /* prints the relevant fields for a header */
 void print_header(microtcp_header_t *header) {
-	printf("[HEADER] Seq: %d\n", header->seq_number);
-	printf("[HEADER] Ack: %d\n", header->ack_number);
-	printf("[HEADER] Control: %d\n", header->control);
+	printf("[HEADER] Seq: %u\n", header->seq_number);
+	printf("[HEADER] Ack: %u\n", header->ack_number)
+;	printf("[HEADER] Control: %u\n", header->control);
 }
 
 /* sends a header to the address */
@@ -168,7 +168,9 @@ static int send_header(microtcp_sock_t *socket, microtcp_header_t *header, struc
 	ssize_t s;
 
 #if DEBUG
+# if THANOS_DEBUG
 	sleep(2);
+# endif
 #endif
 
 	// set seq numbers before sending
@@ -208,7 +210,7 @@ static int receive_header(microtcp_sock_t *socket, microtcp_header_t *header, st
 #if DEBUG
 
 # if THANOS_DEBUG
-	sleep(1);
+	// sleep(1);
 # endif
 
 	printf("Received header: \n");
@@ -243,12 +245,16 @@ static int rand32() {
 // client side connect
 int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, socklen_t address_len) {
 	microtcp_header_t header = { 0 };
-	socket->seq_number = rand32();
+	socket->seq_number = rand32(); //-25874;
 	socket->ack_number = 0;
 	header.control = SYN;
 	header.window = socket->my_init_win_size;
 
-	socket->address = address;
+	#if DEBUG
+	printf("First Seq Number: %u\n", socket->seq_number);
+	#endif
+
+	socket->address = (struct sockaddr*)address; // TODO: why do we set this again lower??
 	socket->address_len = address_len;
 
 	/*
@@ -261,7 +267,7 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 	}*/
 	
 	// step 1: send SYN
-	if (send_header(socket, &header, address, address_len))
+	if (send_header(socket, &header, socket->address, address_len))
 		return -1;
 
 	socket->state = LISTEN;
@@ -269,7 +275,7 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 	microtcp_header_t ret;
 
 	// step 2: wait for SYN-ACK
-	if (receive_header(socket, &ret, address, address_len))
+	if (receive_header(socket, &ret, socket->address, address_len))
 		return -1;
 
 	check_checksum_header(ret);
@@ -289,10 +295,10 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 	header2.control = ACK;
 
 	// step 3: send ACK
-	if (send_header(socket, &header2, address, address_len))
+	if (send_header(socket, &header2, socket->address, address_len))
 		return -1;
 
-	socket->address = address;
+	socket->address = (struct sockaddr*)address; // TODO: fix this cast
 	socket->address_len = address_len;
 
 	socket->state = ESTABLISHED;
@@ -399,6 +405,8 @@ int shutdown_server(microtcp_sock_t *socket, int how) {
 // close logic for client
 int shutdown_client(microtcp_sock_t *socket, int how) {
 
+	printf("Start client shutdown\n");
+
 	microtcp_header_t fin_header = { 0 };
 	fin_header.control = ACK | FIN;
 
@@ -492,7 +500,6 @@ size_t min2(size_t a, size_t b) {
 	return a;
 }
 
-
 ssize_t
 microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int flags)
 {
@@ -512,6 +519,9 @@ microtcp_send (microtcp_sock_t *socket, const void *buffer, size_t length, int f
 	while (data_sent < length) {
 start_send:
 		size_t bytes_to_send = min3(flow_ctrl_win, socket->cwnd, remaining);
+		# if DEBUG
+			printf("bytes to send: %u %u %u %u\n", bytes_to_send, flow_ctrl_win, socket->cwnd, remaining);
+		# endif
 		size_t chunks = bytes_to_send / MICROTCP_MSS + (int)(bytes_to_send % MICROTCP_MSS != 0);
 
 		uint32_t first_seq_number = socket->seq_number;
@@ -552,7 +562,7 @@ start_send:
 		uint32_t last_ack = socket->seq_number;
 		int dupcount = 1;
 		// (maybe?): possibly, instead of a for loop, check a while loop until an ACK of the last sequence number is given.
-		for (int i = 0; i < chunks; i++) {
+		for (size_t i = 0; i < chunks; i++) {
 			ssize_t ret = recvfrom(socket->sd, &ack_header, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
 
 			// Timeout
@@ -573,11 +583,17 @@ start_send:
 			#if DEBUG
 				printf("Received ack  %u\n", ack_header.ack_number);
 			#endif
+			#if !DISABLE_CHECKSUM
 			if (!__check_checksum_header(ack_header)) {
 				goto retransmit;
 			}
+			#endif
 
-			if (ack_header.ack_number < last_ack)
+			/* due to overflow, to check if the last ack received is greater than the one we just received
+			   we have to subtract the two numbers and compare the result with 0. This work even when one
+			   there an overflow, under the assumption that the difference between sequence numbers in the
+			   same "trasmittion pass" is realtively small (~1400 bytes) */
+			if (0 < (int32_t)last_ack - (int32_t)ack_header.ack_number)
 				continue;
 
 			flow_ctrl_win = ack_header.window;
@@ -642,11 +658,13 @@ retransmit:
 				return -1;
 			}
 			// wait for ack
-			s = recvfrom(socket->sd, &win_header, sizeof(microtcp_header_t), 0, socket->address, socket->address_len);
+			s = recvfrom(socket->sd, &win_header, sizeof(microtcp_header_t), 0, socket->address, &socket->address_len);
 			header_to_host(&win_header);
+			#if !DISABLE_CHECKSUM
 			if(!__check_checksum_header(win_header)){
 				continue;
 			}
+			#endif
 			// update_window_size
 			socket->curr_win_size = win_header.window;
 		}
@@ -678,7 +696,9 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 
 	int total_size = 0;
 	size_t received = 0;
-	uint8_t *packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
+	static uint8_t *packet = NULL;
+	if (!packet)
+		packet = malloc(MICROTCP_MSS + sizeof(microtcp_header_t));
 	microtcp_header_t *header;
 	size_t copy_to_user_data;
 	
@@ -727,10 +747,11 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		}
 
 		if (socket->ack_number != header->seq_number) {
-			#if DEBUG
+			// #if DEBUG
 				printf("Out of order packet! Dropping packet with seq number %u, expected %u\n", header->seq_number, socket->ack_number);
-			#endif
+			// #endif
 			send_ack(socket);
+			exit(-1);
 			continue;
 		}
 
@@ -763,8 +784,6 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 			socket->buf_fill_level -= header->data_len;
 			socket->my_curr_win_size += header->data_len;
 		*/
-
-
 
 		received += header->data_len;
 		copy_to_user_data = received <= length ? header->data_len : header->data_len - (received - length);
