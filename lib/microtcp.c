@@ -61,7 +61,7 @@ static int set_seed = 0;
 #define DEBUG 0
 #define THANOS_DEBUG 0
 
-#define DISABLE_CHECKSUM 1
+#define DISABLE_CHECKSUM 0
 
 
 #define create_checksum(header) (header)->checksum = crc32((uint8_t*)(header), sizeof(microtcp_header_t))
@@ -257,14 +257,13 @@ int microtcp_connect (microtcp_sock_t *socket, const struct sockaddr *address, s
 	socket->address = (struct sockaddr*)address; // TODO: why do we set this again lower??
 	socket->address_len = address_len;
 
-	/*
 	struct timeval timeout;
 	timeout.tv_sec = 0;
 	timeout.tv_usec = MICROTCP_ACK_TIMEOUT_US;
 
 	if (setsockopt(socket->sd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(struct timeval)) < 0) {
 		perror("setsockopt failed");
-	}*/
+	}
 	
 	// step 1: send SYN
 	if (send_header(socket, &header, socket->address, address_len))
@@ -404,8 +403,6 @@ int shutdown_server(microtcp_sock_t *socket, int how) {
 
 // close logic for client
 int shutdown_client(microtcp_sock_t *socket, int how) {
-
-	printf("Start client shutdown\n");
 
 	microtcp_header_t fin_header = { 0 };
 	fin_header.control = ACK | FIN;
@@ -747,9 +744,9 @@ microtcp_recv (microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 		}
 
 		if (socket->ack_number != header->seq_number) {
-			// #if DEBUG
+			#if DEBUG
 				printf("Out of order packet! Dropping packet with seq number %u, expected %u\n", header->seq_number, socket->ack_number);
-			// #endif
+			#endif
 			send_ack(socket);
 			exit(-1);
 			continue;
